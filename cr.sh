@@ -39,6 +39,7 @@ Usage: $(basename "$0") <options>
     -l, --mark-as-latest          Mark the created GitHub release as 'latest' (default: true)
         --packages-with-index     Upload chart packages directly into publishing branch
         --use-arm                 Use ARM64 binary (default: false)
+        --pre-release             Mark the release as a pre-release (default: false)
 EOF
 }
 
@@ -57,10 +58,14 @@ main() {
   local packages_with_index=false
   local pages_branch=
   local use_arm=false
+  local pre_release=false
 
   parse_command_line "$@"
 
   : "${CR_TOKEN:?Environment variable CR_TOKEN must be set}"
+
+  # Install chart-releaser first to ensure it's available for all subsequent operations
+  install_chart_releaser
 
   local repo_root
   repo_root=$(git rev-parse --show-toplevel)
@@ -215,6 +220,12 @@ parse_command_line() {
         shift
       fi
       ;;
+    --pre-release)
+      if [[ -n "${2:-}" ]]; then
+          pre_release="$2"
+          shift
+      fi
+      ;;
     --packages-with-index)
       if [[ -n "${2:-}" ]]; then
         packages_with_index="$2"
@@ -268,14 +279,25 @@ install_chart_releaser() {
 
   if [[ ! -d "$install_dir" ]]; then
     mkdir -p "$install_dir"
-    architecture=linux_amd64
-    if [[ "$use_arm" = true ]]; then
-      architecture=linux_arm64
-    fi
-    echo "Installing chart-releaser on $install_dir..."
-    curl -sSLo cr.tar.gz "https://github.com/helm/chart-releaser/releases/download/$version/chart-releaser_${version#v}_${architecture}.tar.gz"
-    tar -xzf cr.tar.gz -C "$install_dir"
-    rm -f cr.tar.gz
+    
+    echo "Building chart-releaser from fork..."
+    git clone https://github.com/yishaynaPalo/chart-releaser.git
+    cd chart-releaser
+    
+    # Checkout your specific branch with the changes you need
+    git checkout feature/add-pre-release-flag
+    
+    # Use go build to create the binary
+    mkdir -p build
+    go build -o build/cr  cr/main.go && chmod +x cr
+    
+    
+    # Copy the installed binary to the install directory
+    cd ..
+    cp  chart-releaser/build/cr "$install_dir/"
+    
+    # Clean up
+    rm -rf chart-releaser
   fi
 
   echo 'Adding cr directory to PATH...'
@@ -339,6 +361,12 @@ release_charts() {
   if [[ "$mark_as_latest" = false ]]; then
     args+=(--make-release-latest=false)
   fi
+
+  if [[ "$pre_release" = true ]]; then
+    args+=(--pre-release)
+    args+=(--make-release-latest=false)
+  fi
+
   if [[ -n "$pages_branch" ]]; then
     args+=(--pages-branch "$pages_branch")
   fi
